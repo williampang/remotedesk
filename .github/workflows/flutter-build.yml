@@ -163,6 +163,13 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
 
+      - name: Upload vcpkg installed
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@master
+        with:
+          name: vcpkg-installed-windows-${{ matrix.job.arch }}
+          path: C:\vcpkg\installed
+
       - name: Build rustdesk
         run: |
           # Windows: build RustDesk

@@ -87,7 +87,6 @@ if(VCPKG_HOST_IS_WINDOWS)
     vcpkg_acquire_msys(MSYS_ROOT PACKAGES automake1.16)
     set(SHELL "${MSYS_ROOT}/usr/bin/bash.exe")
     vcpkg_add_to_path("${MSYS_ROOT}/usr/share/automake-1.16")
-    string(APPEND OPTIONS " --pkg-config=${CURRENT_HOST_INSTALLED_DIR}/tools/pkgconf/pkgconf${VCPKG_HOST_EXECUTABLE_SUFFIX}")
 else()
     find_program(SHELL bash)
 endif()
@@ -350,7 +349,11 @@ elseif(VCPKG_TARGET_IS_WINDOWS)
     set(OPTIONS "${OPTIONS} --extra-cflags=-DHAVE_UNISTD_H=0")
 endif()
 
-vcpkg_find_acquire_program(PKGCONFIG)
+if(VCPKG_HOST_IS_WINDOWS)
+    set(PKGCONFIG "${CURRENT_HOST_INSTALLED_DIR}/tools/pkgconf/pkgconf${VCPKG_HOST_EXECUTABLE_SUFFIX}")
+else()
+    vcpkg_find_acquire_program(PKGCONFIG)
+endif()
 set(OPTIONS "${OPTIONS} --pkg-config=${PKGCONFIG}")
 
 if(VCPKG_LIBRARY_LINKAGE STREQUAL "static")
@@ -399,7 +402,7 @@ if(NOT VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
     z_vcpkg_setup_pkgconfig_path(CONFIG RELEASE)
 
     vcpkg_execute_required_process(
-        COMMAND "${SHELL}" ./build.sh
+        COMMAND "${SHELL}" --noprofile --norc ./build.sh
         WORKING_DIRECTORY "${BUILD_DIR}"
         LOGNAME "build-${TARGET_TRIPLET}-rel"
         SAVE_LOG_FILES ffbuild/config.log
@@ -445,7 +448,7 @@ if(NOT VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "debug")
     z_vcpkg_setup_pkgconfig_path(CONFIG DEBUG)
 
     vcpkg_execute_required_process(
-        COMMAND "${SHELL}" ./build.sh
+        COMMAND "${SHELL}" --noprofile --norc ./build.sh
         WORKING_DIRECTORY "${BUILD_DIR}"
         LOGNAME "build-${TARGET_TRIPLET}-dbg"
         SAVE_LOG_FILES ffbuild/config.log

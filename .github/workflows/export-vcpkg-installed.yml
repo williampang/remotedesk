@@ -1,0 +1,50 @@
+name: Export vcpkg installed
+
+on:
+  workflow_dispatch:
+
+env:
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  export-windows-x64:
+    name: Export Windows x64 vcpkg installed
+    runs-on: windows-2022
+    env:
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup vcpkg with GitHub Actions binary cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+
+      - name: Upload vcpkg installed
+        uses: actions/upload-artifact@master
+        with:
+          name: vcpkg-installed-windows-x64
+          path: C:\vcpkg\installed

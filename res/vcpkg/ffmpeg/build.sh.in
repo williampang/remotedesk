@@ -2,7 +2,7 @@
 
 set -e
 
-export PATH="$PATH:/usr/bin"
+export PATH="/usr/bin:$PATH"
 
 command -v cygpath >/dev/null && have_cygpath=1
 
@@ -70,7 +70,7 @@ merge_binaries() {
     done
 }
 
-export PKG_CONFIG_PATH="$(cygpath -p "${PKG_CONFIG_PATH}")"
+export PKG_CONFIG_PATH="${PKG_CONFIG_PATH}"
 
 # Export HTTP(S)_PROXY as http(s)_proxy:
 [ -n "$HTTP_PROXY"  ] && export http_proxy="$HTTP_PROXY"
