@@ -247,6 +247,12 @@ fn main() {
     find_package("libyuv");
     gen_vcpkg_package("libvpx", "vpx_ffi.h", "vpx_ffi.rs", "^[vV].*");
     gen_vcpkg_package("aom", "aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*");
+    if std::env::var("VCPKG_ROOT").is_ok() {
+        if target_os == "macos" && Path::new("/usr/local/lib/libvmaf.a").exists() {
+            println!("cargo:rustc-link-search=native=/usr/local/lib");
+        }
+        println!("cargo:rustc-link-lib=static=vmaf");
+    }
     gen_vcpkg_package("libyuv", "yuv_ffi.h", "yuv_ffi.rs", ".*");
     // ffmpeg();
 

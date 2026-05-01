@@ -10,6 +10,7 @@ use sciter::{
         Element, HELEMENT,
     },
     make_args,
+    types::UINT,
     video::{video_destination, AssetPtr, COLOR_SPACE},
     Value,
 };
@@ -27,6 +28,7 @@ type Video = AssetPtr<video_destination>;
 
 lazy_static::lazy_static! {
     static ref VIDEO: Arc<Mutex<Option<Video>>> = Default::default();
+    static ref VIDEO_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);
 }
 
 /// SciterHandler
@@ -290,11 +292,32 @@ impl InvokeUiSession for SciterHandler {
     }
 
     fn on_rgba(&self, _display: usize, rgba: &mut scrap::ImageRgb) {
-        VIDEO
-            .lock()
-            .unwrap()
-            .as_mut()
-            .map(|v| v.render_frame(&rgba.raw).ok());
+        if let Some(video) = VIDEO.lock().unwrap().as_mut() {
+            let render_result = if rgba.h > 0 {
+                let stride = (rgba.raw.len() / rgba.h) as u32;
+                video.render_frame_with_stride(&rgba.raw, stride)
+            } else {
+                video.render_frame(&rgba.raw)
+            };
+            match render_result {
+                Ok(()) => {
+                    let count = VIDEO_FRAME_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if count < 3 {
+                        let sample = rgba.raw.get(0..16).unwrap_or(&[]);
+                        log::info!(
+                            "[video] rendered frame #{}, {} bytes, fmt={:?}, sample={:?}",
+                            count + 1,
+                            rgba.raw.len(),
+                            rgba.fmt,
+                            sample
+                        );
+                    }
+                }
+                Err(err) => {
+                    log::error!("[video] render_frame failed: {:?}", err);
+                }
+            }
+        }
     }
 
     fn set_peer_info(&self, pi: &PeerInfo) {
@@ -432,8 +455,8 @@ impl DerefMut for SciterSession {
 }
 
 impl sciter::EventHandler for SciterSession {
-    fn get_subscription(&mut self) -> Option<EVENT_GROUPS> {
-        Some(EVENT_GROUPS::HANDLE_BEHAVIOR_EVENT)
+    fn get_subscription(&mut self) -> Option<UINT> {
+        Some(EVENT_GROUPS::HANDLE_BEHAVIOR_EVENT as UINT)
     }
 
     fn attached(&mut self, root: HELEMENT) {
