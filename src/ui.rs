@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     iter::FromIterator,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -35,6 +36,26 @@ lazy_static::lazy_static! {
 }
 
 struct UIHostHandler;
+
+fn ui_page_file_url(page: &str) -> String {
+    let mut candidates = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join("src/ui").join(page));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ui").join(page));
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return format!("file://{}", candidate.display());
+        }
+    }
+
+    let fallback = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        .join("src/ui")
+        .join(page);
+    format!("file://{}", fallback.display())
+}
 
 pub fn start(args: &mut [String]) {
     #[cfg(target_os = "macos")]
@@ -176,13 +197,7 @@ pub fn start(args: &mut [String]) {
         frame.load_html(html.as_bytes(), Some(page));
     }
     #[cfg(not(feature = "inline"))]
-    frame.load_file(&format!(
-        "file://{}/src/ui/{}",
-        std::env::current_dir()
-            .map(|c| c.display().to_string())
-            .unwrap_or("".to_owned()),
-        page
-    ));
+    frame.load_file(&ui_page_file_url(page));
     let hide_cm = *cm::HIDE_CM.lock().unwrap();
     if !args.is_empty() && args[0] == "--cm" && hide_cm {
         // run_app calls expand(show) + run_loop, we use collapse(hide) + run_loop instead to create a hidden window

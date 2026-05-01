@@ -303,13 +303,49 @@ impl InvokeUiSession for SciterHandler {
                 Ok(()) => {
                     let count = VIDEO_FRAME_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if count < 3 {
-                        let sample = rgba.raw.get(0..16).unwrap_or(&[]);
+                        let bytes_per_pixel = 4usize;
+                        let stride = if rgba.h > 0 { rgba.raw.len() / rgba.h } else { 0 };
+                        let pixel_at = |x: usize, y: usize| -> Option<[u8; 4]> {
+                            if stride == 0 || rgba.w == 0 || rgba.h == 0 || x >= rgba.w || y >= rgba.h {
+                                return None;
+                            }
+                            let offset = y.checked_mul(stride)?.checked_add(x.checked_mul(bytes_per_pixel)?)?;
+                            let px = rgba.raw.get(offset..offset + bytes_per_pixel)?;
+                            Some([px[0], px[1], px[2], px[3]])
+                        };
+                        let top_left = pixel_at(0, 0);
+                        let center = pixel_at(rgba.w / 2, rgba.h / 2);
+                        let bottom_right = pixel_at(rgba.w.saturating_sub(1), rgba.h.saturating_sub(1));
+                        let mut sample_count = 0usize;
+                        let mut brightness_total = 0usize;
+                        let step_y = (rgba.h / 8).max(1);
+                        let step_x = (rgba.w / 8).max(1);
+                        let mut y = 0usize;
+                        while y < rgba.h {
+                            let mut x = 0usize;
+                            while x < rgba.w {
+                                if let Some(px) = pixel_at(x, y) {
+                                    brightness_total += (px[0] as usize + px[1] as usize + px[2] as usize) / 3;
+                                    sample_count += 1;
+                                }
+                                x = x.saturating_add(step_x);
+                            }
+                            y = y.saturating_add(step_y);
+                        }
+                        let avg_brightness = if sample_count > 0 {
+                            brightness_total / sample_count
+                        } else {
+                            0
+                        };
                         log::info!(
-                            "[video] rendered frame #{}, {} bytes, fmt={:?}, sample={:?}",
+                            "[video] rendered frame #{}, {} bytes, fmt={:?}, top_left={:?}, center={:?}, bottom_right={:?}, avg_brightness={}",
                             count + 1,
                             rgba.raw.len(),
                             rgba.fmt,
-                            sample
+                            top_left,
+                            center,
+                            bottom_right,
+                            avg_brightness
                         );
                     }
                 }
