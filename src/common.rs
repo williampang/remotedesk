@@ -2093,7 +2093,7 @@ fn apply_default_server_settings() {
     );
     defaults.insert(
         keys::OPTION_API_SERVER.to_owned(),
-        "http://118.31.237.153:21118".to_owned(),
+        "118.31.237.153:21114".to_owned(),
     );
     defaults.insert(
         keys::OPTION_KEY.to_owned(),
