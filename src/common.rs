@@ -2081,7 +2081,28 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+fn apply_default_server_settings() {
+    let mut defaults = config::DEFAULT_SETTINGS.write().unwrap();
+    defaults.insert(
+        keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
+        "118.31.237.153:21116".to_owned(),
+    );
+    defaults.insert(
+        keys::OPTION_RELAY_SERVER.to_owned(),
+        "118.31.237.153:21117".to_owned(),
+    );
+    defaults.insert(
+        keys::OPTION_API_SERVER.to_owned(),
+        "http://118.31.237.153:21118".to_owned(),
+    );
+    defaults.insert(
+        keys::OPTION_KEY.to_owned(),
+        "Xud8YMz3FROSqZDzgGj1B89Vz5q4f35Pr+Ui9QH19Uc=".to_owned(),
+    );
+}
+
 pub fn load_custom_client() {
+    apply_default_server_settings();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

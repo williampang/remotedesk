@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use chrono::{Duration, Local, NaiveDateTime};
 use sciter::Value;
 
 use hbb_common::{
@@ -55,6 +56,44 @@ fn ui_page_file_url(page: &str) -> String {
         .join("src/ui")
         .join(page);
     format!("file://{}", fallback.display())
+}
+
+fn report_paid_license_logout() {
+    let user_name = LocalConfig::get_option("paid-license-key");
+    let status_code = LocalConfig::get_option("paid-license-status-code");
+    if user_name.is_empty() || status_code.is_empty() {
+        return;
+    }
+
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("StatusCode", &status_code)
+        .append_pair("UserName", &user_name)
+        .finish();
+    let header = r#"{"Content-Type":"application/x-www-form-urlencoded"}"#.to_owned();
+    allow_err!(crate::common::http_request_sync(
+        "http://w.eydata.net/ABEE5B51DCF328E8".to_owned(),
+        "POST".to_owned(),
+        Some(body),
+        header,
+    ));
+}
+
+fn is_paid_license_expiring_soon(expire_at: &str) -> bool {
+    let expire_at = expire_at.trim();
+    if expire_at.is_empty() {
+        return false;
+    }
+
+    let parsed = match NaiveDateTime::parse_from_str(expire_at, "%Y-%m-%d %H:%M:%S") {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let expire_at = match parsed.and_local_timezone(Local).single() {
+        Some(value) => value,
+        None => return false,
+    };
+    let remain = expire_at - Local::now();
+    remain >= Duration::zero() && remain <= Duration::days(1)
 }
 
 pub fn start(args: &mut [String]) {
@@ -279,6 +318,10 @@ impl UI {
         get_local_option(key)
     }
 
+    fn is_paid_license_expiring_soon(&self, expire_at: String) -> bool {
+        is_paid_license_expiring_soon(&expire_at)
+    }
+
     fn set_local_option(&self, key: String, value: String) {
         set_local_option(key, value);
     }
@@ -411,6 +454,7 @@ impl UI {
     }
 
     fn closing(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        report_paid_license_logout();
         crate::server::input_service::fix_key_down_timeout_at_exit();
         LocalConfig::set_size(x, y, w, h);
     }
@@ -502,6 +546,15 @@ impl UI {
 
     fn new_remote(&mut self, id: String, remote_type: String, force_relay: bool) {
         new_remote(id, remote_type, force_relay)
+    }
+
+    fn close_all_remote_connections(&self) {
+        close_all_remote_connections()
+    }
+
+    fn quit_app(&self) {
+        report_paid_license_logout();
+        std::process::exit(0);
     }
 
     fn is_process_trusted(&mut self, _prompt: bool) -> bool {
@@ -621,7 +674,8 @@ impl UI {
         change_id_shared(id, old_id);
     }
 
-    fn http_request(&self, url: String, method: String, body: Option<String>, header: String) {
+    fn http_request(&self, url: String, method: String, body: String, header: String) {
+        let body = if body.is_empty() { None } else { Some(body) };
         http_request(url, method, body, header)
     }
 
@@ -637,8 +691,8 @@ impl UI {
         get_async_job_status()
     }
 
-    fn get_http_status(&self, url: String) -> Option<String> {
-        get_async_http_status(url)
+    fn get_http_status(&self, url: String) -> String {
+        get_async_http_status(url).unwrap_or_default()
     }
 
     fn t(&self, name: String) -> String {
@@ -753,6 +807,8 @@ impl sciter::EventHandler for UI {
         fn closing(i32, i32, i32, i32);
         fn get_size();
         fn new_remote(String, String, bool);
+            fn close_all_remote_connections();
+        fn quit_app();
         fn send_wol(String);
         fn remove_peer(String);
         fn remove_discovered(String);
@@ -786,6 +842,7 @@ impl sciter::EventHandler for UI {
         fn get_options();
         fn get_option(String);
         fn get_local_option(String);
+        fn is_paid_license_expiring_soon(String);
         fn set_local_option(String, String);
         fn get_peer_option(String, String);
         fn peer_has_password(String);
@@ -809,6 +866,8 @@ impl sciter::EventHandler for UI {
         fn open_url(String);
         fn change_id(String);
         fn get_async_job_status();
+        fn http_request(String, String, String, String);
+        fn get_http_status(String);
         fn post_request(String, String, String);
         fn is_ok_change_id();
         fn create_shortcut(String);

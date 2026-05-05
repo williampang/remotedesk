@@ -52,10 +52,344 @@ var svg_menu = <svg #menu viewBox="0 0 512 512">
 </svg>;
 var svg_refresh_password = <svg #refresh-password xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
 
+function normalizePaidLicenseKey(key) {
+    return (key || "").trim();
+}
+
+function maskPaidLicenseKey(key) {
+    key = normalizePaidLicenseKey(key);
+    if (!key) return "";
+    if (key.length <= 6) return key;
+    return key.substr(0, 3) + "..." + key.substr(key.length - 3, 3);
+}
+
+function formatPaidLicenseExpireDate(value) {
+    value = normalizePaidLicenseKey(value);
+    if (!value) return "";
+
+    var match = value.match(/^(\d{4})[-\/年]?(\d{1,2})[-\/月]?(\d{1,2})/);
+    if (!match) return value;
+
+    var year = match[1];
+    var month = match[2].length == 1 ? "0" + match[2] : match[2];
+    var day = match[3].length == 1 ? "0" + match[3] : match[3];
+    return year + "年" + month + "月" + day + "日";
+}
+
+const paid_license_verify_url = "http://w.eydata.net/3658A72E070C25AA";
+const paid_license_expire_url = "http://w.eydata.net/CC9BBA3E68074684";
+const paid_license_verify_headers = JSON.stringify({
+    "Content-Type": "application/x-www-form-urlencoded"
+});
+const paid_license_error_messages = {
+    "-1": "网络链接失败",
+    "-5": "错误的参数,请检查参数是否正确.",
+    "-15": "频繁调用,请等待10分钟后再做尝试.",
+    "-17": "错误的调用方式,请确认后台接口的调用方式.",
+    "-18": "单IP频繁访问限制.",
+    "-24": "接口操作频繁,请重试!",
+    "-25": "操作频繁,上个操作还未完成,请等上个操作完成再尝试",
+    "-26": "接口访问过于频繁,请稍后再访问或开通vip解除此限制!",
+    "-39": "IP操作频繁,请重试!",
+    "-40": "接口频繁访问被限制,请重试!",
+    "-41": "接口访问错误!",
+    "-117": "未输入机器码.",
+    "-201": "程序不存在",
+    "-202": "程序密钥输入错误",
+    "-203": "程序版本号错误",
+    "-204": "程序版本不存在",
+    "-206": "程序版本需要更新",
+    "-207": "程序版本已停用",
+    "-208": "程序未开启后台接口功能.",
+    "-209": "程序接口密码错误",
+    "-301": "卡密输入错误",
+    "-302": "卡密不存在",
+    "-303": "卡密已经使用",
+    "-304": "卡密已经过期",
+    "-305": "卡密已经冻结",
+    "-306": "卡密已经退换",
+    "-308": "卡密已经换卡",
+    "-401": "单码卡密错误",
+    "-402": "单码卡密机器码错误",
+    "-403": "单码卡密IP错误",
+    "-404": "单码卡密类型错误",
+    "-405": "单码卡密被禁用",
+    "-406": "单码卡密不存在",
+    "-407": "单码卡密未激活",
+    "-408": "单码卡密已经使用",
+    "-409": "单码充值卡密错误",
+    "-410": "单码卡密过期",
+    "-420": "单码卡密在别的电脑上登录",
+    "-421": "单码卡密超过最大登录数,如果确定已经下线,请等60分钟后重试",
+    "-422": "单码IP一样,无需转绑",
+    "-423": "单码小时卡机器码限制",
+    "-424": "单码小时卡ip限制",
+    "-425": "代理被禁用无法登录",
+    "-501": "单码管理信息错误",
+    "-502": "单码机器码转绑次数超过限制",
+    "-503": "单码机器码转绑后将过期",
+    "-504": "单码IP转绑次数超过限制",
+    "-505": "单码IP转绑后将过期",
+    "-506": "单码未开启机器码验证,无需转绑.",
+    "-507": "单码未开启IP地址验证,无需转绑",
+    "1": "成功!"
+};
+
+function isPaidLicenseKeyValid(key) {
+    return !!normalizePaidLicenseKey(key) && paid_license_verified;
+}
+
+function encodeFormValue(value) {
+    return (value == null ? "" : ("" + value)).urlEscape();
+}
+
+function encodeFormData(data) {
+    var pairs = [];
+    for (var key in data) {
+        pairs.push(encodeFormValue(key) + "=" + encodeFormValue(data[key]));
+    }
+    return pairs.join("&");
+}
+
+function getPaidLicenseErrorMessage(code) {
+    code = normalizePaidLicenseKey(code);
+    return paid_license_error_messages[code] || ("错误码：" + code);
+}
+
+function requestPaidLicenseApi(url, requestParams, onSuccess, onError, logPrefix) {
+    var requestBody = encodeFormData(requestParams);
+    stdout.println(logPrefix + " params:", JSON.stringify(requestParams));
+    stdout.println(logPrefix + " form body:", requestBody);
+    handler.http_request(url, "POST", requestBody, paid_license_verify_headers);
+    function checkStatus() {
+        var status = handler.get_http_status(url);
+        if (!status || status == " ") {
+            self.timer(0.1s, checkStatus);
+            return;
+        }
+        try {
+            var response = JSON.parse(status || "{}");
+            var rawBody = normalizePaidLicenseKey(response.body || "");
+            stdout.println(logPrefix + " response:", rawBody);
+            if (response.status_code != 200) {
+                onError("遇到错误，请检查网络重试");
+                return;
+            }
+            onSuccess(rawBody);
+        } catch (e) {
+            stdout.println(logPrefix + " parse error:", e);
+            onError("遇到错误，请检查网络重试");
+        }
+    }
+    checkStatus();
+}
+
+function requestPaidLicenseVerify(singleCode, onSuccess, onError) {
+    requestPaidLicenseApi(paid_license_verify_url, {
+        SingleCode: singleCode,
+        Ver: handler.get_version(),
+        Mac: handler.get_uuid()
+    }, onSuccess, onError, "eydata verify");
+}
+
+function requestPaidLicenseExpireInfo(userName, onSuccess, onError) {
+    requestPaidLicenseApi(paid_license_expire_url, {
+        UserName: userName
+    }, onSuccess, onError, "eydata expire");
+}
+
 var my_id = handler.get_id();
+const paid_license_storage_key = "paid-license-key";
+const paid_license_status_code_storage_key = "paid-license-status-code";
+var paid_license_key = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
+var paid_license_verified = false;
+var paid_license_expire_at = "";
+var paid_license_expired_key = "";
+var paid_license_checking = false;
+var paid_license_last_validate_at = 0;
+
+const paid_license_validate_interval_ms = 60 * 1000;
+const paid_license_expiring_soon_ms = 24 * 60 * 60 * 1000;
+
+function isPaidLicenseExpiredCode(code) {
+    code = normalizePaidLicenseKey(code);
+    return code == "-304" || code == "-410";
+}
+
+function setPaidLicenseVerifiedState(key, expireAt) {
+    paid_license_key = normalizePaidLicenseKey(key);
+    paid_license_verified = !!paid_license_key;
+    paid_license_expire_at = normalizePaidLicenseKey(expireAt);
+    paid_license_expired_key = "";
+    paid_license_checking = false;
+    paid_license_last_validate_at = getTime();
+}
+
+function setPaidLicenseExpiredState(key) {
+    paid_license_expired_key = normalizePaidLicenseKey(key);
+    paid_license_key = "";
+    paid_license_verified = false;
+    paid_license_expire_at = "";
+    paid_license_checking = false;
+    paid_license_last_validate_at = getTime();
+    handler.set_local_option(paid_license_storage_key, "");
+    handler.set_local_option(paid_license_status_code_storage_key, "");
+    handler.close_all_remote_connections();
+}
+
+function hasSavedVerifiedPaidLicense() {
+    var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
+    var savedStatusCode = normalizePaidLicenseKey(handler.get_local_option(paid_license_status_code_storage_key));
+    return !!savedKey && !!savedStatusCode;
+}
+
+function isPaidLicenseExpiringSoon() {
+    var expireAt = normalizePaidLicenseKey(paid_license_expire_at);
+    if (!expireAt) return false;
+    return !!handler.is_paid_license_expiring_soon(expireAt);
+}
+
+function refreshPaidLicenseStatus() {
+    var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
+    var savedStatusCode = normalizePaidLicenseKey(handler.get_local_option(paid_license_status_code_storage_key));
+    if (!savedKey || !savedStatusCode || paid_license_checking) return;
+
+    paid_license_checking = true;
+    requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
+        if (rawBody && rawBody[0] != '-') {
+            var wasVerified = paid_license_verified;
+            setPaidLicenseVerifiedState(savedKey, rawBody);
+            if (!wasVerified) {
+                self.timer(1ms, function() {
+                    var remoteId = $(#remote_id);
+                    if (remoteId) view.focus = remoteId;
+                });
+            }
+        } else if (isPaidLicenseExpiredCode(rawBody)) {
+            setPaidLicenseExpiredState(savedKey);
+        } else {
+            paid_license_checking = false;
+            paid_license_last_validate_at = getTime();
+        }
+        app.update();
+    }, function(_) {
+        paid_license_checking = false;
+        paid_license_last_validate_at = getTime();
+        app.update();
+    });
+}
+
+function ensureStartupPaidLicense() {
+    if (!hasSavedVerifiedPaidLicense()) {
+        paid_license_key = "";
+        paid_license_verified = false;
+        paid_license_expire_at = "";
+        paid_license_expired_key = "";
+        paid_license_checking = false;
+        return;
+    }
+
+    var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
+    paid_license_key = savedKey;
+    paid_license_checking = true;
+    requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
+        if (rawBody && rawBody[0] != '-') {
+            setPaidLicenseVerifiedState(savedKey, rawBody);
+            app.update();
+            self.timer(1ms, function() {
+                var remoteId = $(#remote_id);
+                if (remoteId) view.focus = remoteId;
+            });
+            return;
+        }
+        if (isPaidLicenseExpiredCode(rawBody)) {
+            setPaidLicenseExpiredState(savedKey);
+        } else {
+            paid_license_verified = false;
+            paid_license_checking = false;
+            paid_license_last_validate_at = getTime();
+        }
+        app.update();
+    }, function(_) {
+        paid_license_verified = false;
+        paid_license_checking = false;
+        paid_license_last_validate_at = getTime();
+        app.update();
+    });
+}
+
+function restoreSavedPaidLicense() {
+    var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
+    if (!savedKey) {
+        paid_license_checking = false;
+        return;
+    }
+    paid_license_key = savedKey;
+    refreshPaidLicenseStatus();
+}
+
 function get_id() {
   my_id = handler.get_id();
   return my_id;
+}
+
+function submitPaidLicenseKey() {
+    var input = $(#paid_license_key);
+    var key = normalizePaidLicenseKey(input ? input.value : "");
+    if (!key) {
+        msgbox("custom-error", "Error", "请输入付费码");
+        return;
+    }
+    requestPaidLicenseVerify(key, function(rawBody) {
+        var success = rawBody == "1" || rawBody.length == 32;
+        if (!success) {
+            msgbox("custom-error", "Error", getPaidLicenseErrorMessage(rawBody));
+            return;
+        }
+        handler.set_local_option(paid_license_storage_key, key);
+        handler.set_local_option(paid_license_status_code_storage_key, rawBody);
+        paid_license_checking = true;
+        requestPaidLicenseExpireInfo(key, function(expireAt) {
+            if (expireAt && expireAt[0] != '-') {
+                setPaidLicenseVerifiedState(key, expireAt);
+                app.update();
+                self.timer(1ms, function() {
+                    var remoteId = $(#remote_id);
+                    if (remoteId) view.focus = remoteId;
+                });
+                return;
+            }
+            if (isPaidLicenseExpiredCode(expireAt)) {
+                setPaidLicenseExpiredState(key);
+                app.update();
+                return;
+            }
+            paid_license_checking = false;
+            paid_license_last_validate_at = getTime();
+            msgbox("custom-error", "Error", getPaidLicenseErrorMessage(expireAt));
+        }, function(errMsg) {
+            paid_license_checking = false;
+            paid_license_last_validate_at = getTime();
+            msgbox("custom-error", "Error", errMsg);
+        });
+    }, function(errMsg) {
+        msgbox("custom-error", "Error", errMsg);
+    });
+}
+
+function clearPaidLicenseKey() {
+    paid_license_expired_key = "";
+    paid_license_key = "";
+    paid_license_verified = false;
+    paid_license_expire_at = "";
+    paid_license_checking = false;
+    handler.set_local_option(paid_license_storage_key, "");
+    handler.set_local_option(paid_license_status_code_storage_key, "");
+    app.update();
+    self.timer(1ms, function() {
+        var paidLicense = $(#paid_license_key);
+        if (paidLicense) view.focus = paidLicense;
+    });
 }
 
 function get_msgbox_width(width=500) {
@@ -739,15 +1073,34 @@ class App: Reactor.Component
                 </div>
                 {!incoming_only && <div .right-pane>
                     <div .right-content>
-                        <div .card-connect>
-                            <div .title>{translate('Control Remote Desktop')}</div>
-                            <ID @{this.remote_id} />
-                            <div .right-buttons>
-                                <button .button .outline #file-transfer>{translate('Transfer file')}</button>
-                                <button .button #connect>{translate('Connect')}</button>
+                        {paid_license_verified ?
+                            <div>
+                                <div .card-connect>
+                                    <div class={"current-paid-license" + (isPaidLicenseExpiringSoon() ? " expiring-soon" : "")}>
+                                        <span>当前付费码: {maskPaidLicenseKey(paid_license_key)}</span>
+                                        {paid_license_expire_at ? <span .paid-license-expire-at>到期日期: {formatPaidLicenseExpireDate(paid_license_expire_at)}</span> : ""}
+                                        <span .link #clear-paid-license>清除</span>
+                                    </div>
+                                    <div .title>{translate('Control Remote Desktop')}</div>
+                                    <ID @{this.remote_id} />
+                                    <div .right-buttons>
+                                        <button .button .outline #file-transfer>{translate('Transfer file')}</button>
+                                        <button .button #connect>{translate('Connect')}</button>
+                                    </div>
+                                </div>
+                                <MultipleSessions @{this.multipleSessions} />
                             </div>
-                        </div>
-                        <MultipleSessions @{this.multipleSessions} />
+                            :
+                            <div .card-license>
+                                <div .license-tip>当前是被控模式，如需转主控模式，请输入付费码</div>
+                                {paid_license_expired_key ? <div .license-expired-tip>当前付费码: {maskPaidLicenseKey(paid_license_expired_key)} 已到期</div> : ""}
+                                <div .title>请输入付费码</div>
+                                <input type="text" #paid_license_key .outline-focus novalue="请输入付费码"
+                                    value={paid_license_key} />
+                                <div .license-actions>
+                                    <button .button #validate-license>验证</button>
+                                </div>
+                            </div>}
                     </div>
                     {!outgoing_only ? <ConnectStatus @{this.connect_status} /> : ""}
                 </div>}
@@ -757,6 +1110,24 @@ class App: Reactor.Component
 
     event click $(button#connect) {
         this.newRemote("connect");
+    }
+
+    event click $(button#validate-license) {
+        submitPaidLicenseKey();
+    }
+
+    event click $(#clear-paid-license) {
+        msgbox(
+            "custom",
+            "提示",
+            "是否删除当前付费码？",
+            "",
+            function(res=null) {
+                if (res != null) clearPaidLicenseKey();
+            },
+            msgbox_default_height,
+            get_msgbox_width(360)
+        );
     }
 
     event click $(button#file-transfer) {
@@ -1306,12 +1677,13 @@ function formatId(id) {
 }
 
 event keydown (evt) {
-    if (view.focus && view.focus.id != 'remote_id') {
+    if (view.focus && view.focus.id != 'remote_id' && view.focus.id != 'paid_license_key') {
         return;
     }
     if (!evt.shortcutKey) {
         if (isEnterKey(evt)) {
-            var el = $(button#connect);
+            var el = view.focus && view.focus.id == 'paid_license_key' ? $(button#validate-license) : $(button#connect);
+            if (!el) return;
             view.focus = el;
             el.sendEvent("click");
             // simulate button click effect, windows does not have this issue
@@ -1388,9 +1760,13 @@ function self.ready() {
     } else {
         centerize(scaleIt(incoming_only ? incoming_only_width : 800), scaleIt(incoming_only ? 390 : 600));
     }
-    if (!handler.get_remote_id()) {
+    if (!paid_license_verified) {
+        var paidLicense = $(#paid_license_key);
+        if (paidLicense) view.focus = paidLicense;
+    } else if (!handler.get_remote_id()) {
         view.focus = $(#remote_id);
     }
+    ensureStartupPaidLicense();
     refreshCurrentUser();
     updateTheme();
 }
@@ -1459,6 +1835,9 @@ function checkConnectStatus() {
         if (tmp != disable_udp) {
             disable_udp = tmp;
             app.update();
+        }
+        if (!paid_license_checking && handler.get_local_option(paid_license_storage_key) && getTime() - paid_license_last_validate_at >= paid_license_validate_interval_ms) {
+            refreshPaidLicenseStatus();
         }
         check_if_overlay();
         checkConnectStatus();    

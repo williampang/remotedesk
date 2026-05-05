@@ -1142,6 +1142,17 @@ pub fn new_remote(id: String, remote_type: String, force_relay: bool) {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios", feature = "flutter")))]
+pub fn close_all_remote_connections() {
+    let mut lock = CHILDREN.lock().unwrap();
+    let children = lock.1.drain().collect::<Vec<_>>();
+    drop(lock);
+    for (_, mut child) in children {
+        allow_err!(child.kill());
+        let _ = child.try_wait();
+    }
+}
+
 // Make sure `SENDER` is inited here.
 #[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

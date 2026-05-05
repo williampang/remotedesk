@@ -177,7 +177,65 @@ span.clear-input:hover {
 
 .card-connect {
     @CARD;
-    width: 320px;
+    width: 420px;
+}
+
+.current-paid-license {
+    flow: horizontal;
+    border-spacing: 0.6em;
+    color: color(lighter-text);
+    font-size: 0.9em;
+    line-height: 1.5em;
+}
+
+.current-paid-license.expiring-soon {
+    color: #d9534f;
+    font-size: 1.1em;
+    font-weight: 600;
+}
+
+.current-paid-license > span:first-child {
+    width: *;
+}
+
+.paid-license-expire-at {
+    color: color(light-text);
+}
+
+.card-license {
+    @CARD;
+    width: 420px;
+    margin-top: *;
+    margin-bottom: *;
+    border-spacing: 1.4em;
+}
+
+.card-license input[type=text] {
+    width: *;
+    font-size: 1.2em;
+    height: 2.2em;
+}
+
+.license-tip {
+    color: color(lighter-text);
+    font-size: 0.9em;
+    line-height: 1.5em;
+}
+
+.license-expired-tip {
+    color: #d9534f;
+    font-size: 0.95em;
+    line-height: 1.5em;
+}
+
+.license-checking-tip {
+    color: color(light-text);
+    font-size: 0.95em;
+    line-height: 1.5em;
+}
+
+.license-actions {
+    text-align: right;
 }
 
 .right-buttons {
