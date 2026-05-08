@@ -111,7 +111,8 @@ make
 cp libvpx.a $HOME/vcpkg/installed/x64-linux/lib/
 cd
 ```
-
+# msiexec /i RustDesk.msi /quiet /norestart
+# https://visualstudio.microsoft.com/zh-hans/downloads/
 ### Build
 
 ```sh
@@ -123,7 +124,6 @@ mkdir -p target/debug
 wget https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.lnx/x64/libsciter-gtk.so
 mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
-VCPKG_ROOT=$HOME/vcpkg RUSTFLAGS='-L native=/usr/local/opt/libvmaf/lib -l static=vmaf' cargo run
 ```
 
 ## How to build with Docker

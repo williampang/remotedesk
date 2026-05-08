@@ -1029,19 +1029,8 @@ pub fn is_setup(name: &str) -> bool {
 }
 
 pub fn get_custom_rendezvous_server(custom: String) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.host.is_empty() {
-            return lic.host.clone();
-        }
-    }
-    if !custom.is_empty() {
-        return custom;
-    }
-    if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {
-        return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
-    }
-    "".to_owned()
+    let _ = custom;
+    config::FIXED_RENDEZVOUS_SERVER.to_owned()
 }
 
 #[inline]
@@ -1063,25 +1052,8 @@ pub fn get_api_server(api: String, custom: String) -> String {
 }
 
 fn get_api_server_(api: String, custom: String) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.api.is_empty() {
-            return lic.api.clone();
-        }
-    }
-    if !api.is_empty() {
-        return api.to_owned();
-    }
-    let s0 = get_custom_rendezvous_server(custom);
-    if !s0.is_empty() {
-        let s = crate::increase_port(&s0, -2);
-        if s == s0 {
-            return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
-        } else {
-            return format!("http://{}", s);
-        }
-    }
-    "https://admin.rustdesk.com".to_owned()
+    let _ = (api, custom);
+    config::FIXED_API_SERVER.to_owned()
 }
 
 #[inline]
@@ -1803,25 +1775,8 @@ pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError
 }
 
 pub async fn get_key(sync: bool) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.key.is_empty() {
-            return lic.key;
-        }
-    }
-    #[cfg(target_os = "ios")]
-    let mut key = Config::get_option("key");
-    #[cfg(not(target_os = "ios"))]
-    let mut key = if sync {
-        Config::get_option("key")
-    } else {
-        let mut options = crate::ipc::get_options_async().await;
-        options.remove("key").unwrap_or_default()
-    };
-    if key.is_empty() {
-        key = config::RS_PUB_KEY.to_owned();
-    }
-    key
+    let _ = sync;
+    config::FIXED_KEY.to_owned()
 }
 
 pub fn pk_to_fingerprint(pk: Vec<u8>) -> String {
@@ -2085,19 +2040,19 @@ fn apply_default_server_settings() {
     let mut defaults = config::DEFAULT_SETTINGS.write().unwrap();
     defaults.insert(
         keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
-        "118.31.237.153:21116".to_owned(),
+        config::FIXED_RENDEZVOUS_SERVER.to_owned(),
     );
     defaults.insert(
         keys::OPTION_RELAY_SERVER.to_owned(),
-        "118.31.237.153:21117".to_owned(),
+        config::FIXED_RELAY_SERVER.to_owned(),
     );
     defaults.insert(
         keys::OPTION_API_SERVER.to_owned(),
-        "118.31.237.153:21114".to_owned(),
+        config::FIXED_API_SERVER.to_owned(),
     );
     defaults.insert(
         keys::OPTION_KEY.to_owned(),
-        "Xud8YMz3FROSqZDzgGj1B89Vz5q4f35Pr+Ui9QH19Uc=".to_owned(),
+        config::FIXED_KEY.to_owned(),
     );
 }
 
@@ -2836,27 +2791,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_tcp_proxy_addr_normalizes_bare_ipv6_host() {
-        struct RestoreCustomRendezvousServer(String);
-
-        impl Drop for RestoreCustomRendezvousServer {
-            fn drop(&mut self) {
-                Config::set_option(
-                    keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
-                    self.0.clone(),
-                );
-            }
-        }
-
-        let _restore = RestoreCustomRendezvousServer(Config::get_option(
-            keys::OPTION_CUSTOM_RENDEZVOUS_SERVER,
-        ));
-        Config::set_option(
-            keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
-            "1:2".to_string(),
-        );
-
-        assert_eq!(get_tcp_proxy_addr(), format!("[1:2]:{RENDEZVOUS_PORT}"));
+    fn test_get_tcp_proxy_addr_uses_fixed_rendezvous_server() {
+        assert_eq!(get_tcp_proxy_addr(), config::FIXED_RENDEZVOUS_SERVER);
     }
 
     #[tokio::test]

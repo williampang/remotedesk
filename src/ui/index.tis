@@ -67,13 +67,80 @@ function formatPaidLicenseExpireDate(value) {
     value = normalizePaidLicenseKey(value);
     if (!value) return "";
 
-    var match = value.match(/^(\d{4})[-\/年]?(\d{1,2})[-\/月]?(\d{1,2})/);
+    var match = value.match(/^(\d{4})[-\/年]?(\d{1,2})[-\/月]?(\d{1,2})(?:\D+(\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?)?/);
     if (!match) return value;
 
     var year = match[1];
     var month = match[2].length == 1 ? "0" + match[2] : match[2];
     var day = match[3].length == 1 ? "0" + match[3] : match[3];
-    return year + "年" + month + "月" + day + "日";
+    if (!match[4]) return year + "年" + month + "月" + day + "日";
+
+    var hour = match[4].length == 1 ? "0" + match[4] : match[4];
+    var minute = match[5] ? (match[5].length == 1 ? "0" + match[5] : match[5]) : "00";
+    var second = match[6] ? (match[6].length == 1 ? "0" + match[6] : match[6]) : "00";
+    return year + "年" + month + "月" + day + "日 " + hour + ":" + minute + ":" + second;
+}
+
+function parsePaidLicenseExpireTime(value) {
+    value = normalizePaidLicenseKey(value);
+    if (!value) return null;
+
+    var match = value.match(/^(\d{4})[-\/年]?(\d{1,2})[-\/月]?(\d{1,2})(?:\D+(\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?)?/);
+    if (!match) return null;
+
+    var year = match[1].toInteger();
+    var month = match[2].toInteger();
+    var day = match[3].toInteger();
+    var hour = match[4] ? match[4].toInteger() : 0;
+    var minute = match[5] ? match[5].toInteger() : 0;
+    var second = match[6] ? match[6].toInteger() : 0;
+
+    if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return null;
+    }
+
+    var daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    var isLeapYear = function(y) {
+        return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    };
+
+    var maxDay = daysInMonth[month - 1];
+    if (month == 2 && isLeapYear(year)) {
+        maxDay = 29;
+    }
+    if (day > maxDay) {
+        return null;
+    }
+
+    var daysSinceEpoch = 0;
+    for (var y = 1970; y < year; ++y) {
+        daysSinceEpoch += isLeapYear(y) ? 366 : 365;
+    }
+    for (var m = 1; m < month; ++m) {
+        daysSinceEpoch += daysInMonth[m - 1];
+        if (m == 2 && isLeapYear(year)) {
+            daysSinceEpoch += 1;
+        }
+    }
+    daysSinceEpoch += day - 1;
+
+    var totalSeconds = (((daysSinceEpoch * 24 + hour - 8) * 60 + minute) * 60 + second);
+    return totalSeconds * 1000;
+}
+
+function isPaidLicenseExpiredAt(expireAt) {
+    var expireTime = parsePaidLicenseExpireTime(expireAt);
+    if (expireTime == null) return false;
+    var now = getTime();
+    stdout.println("paid license expire compare:", JSON.stringify({
+        raw_expire_at: normalizePaidLicenseKey(expireAt),
+        parsed_expire_at_ms: expireTime,
+        parsed_expire_at_local: formatPaidLicenseExpireDate(expireAt),
+        now_ms: now,
+        now_local: new Date().toLocaleString(),
+        expired: now >= expireTime
+    }));
+    return now >= expireTime;
 }
 
 const paid_license_verify_url = "http://w.eydata.net/3658A72E070C25AA";
@@ -246,6 +313,7 @@ function hasSavedVerifiedPaidLicense() {
 function isPaidLicenseExpiringSoon() {
     var expireAt = normalizePaidLicenseKey(paid_license_expire_at);
     if (!expireAt) return false;
+    if (isPaidLicenseExpiredAt(expireAt)) return false;
     return !!handler.is_paid_license_expiring_soon(expireAt);
 }
 
@@ -257,6 +325,11 @@ function refreshPaidLicenseStatus() {
     paid_license_checking = true;
     requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
         if (rawBody && rawBody[0] != '-') {
+            if (isPaidLicenseExpiredAt(rawBody)) {
+                setPaidLicenseExpiredState(savedKey);
+                app.update();
+                return;
+            }
             var wasVerified = paid_license_verified;
             setPaidLicenseVerifiedState(savedKey, rawBody);
             if (!wasVerified) {
@@ -294,6 +367,11 @@ function ensureStartupPaidLicense() {
     paid_license_checking = true;
     requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
         if (rawBody && rawBody[0] != '-') {
+            if (isPaidLicenseExpiredAt(rawBody)) {
+                setPaidLicenseExpiredState(savedKey);
+                app.update();
+                return;
+            }
             setPaidLicenseVerifiedState(savedKey, rawBody);
             app.update();
             self.timer(1ms, function() {
@@ -351,6 +429,12 @@ function submitPaidLicenseKey() {
         paid_license_checking = true;
         requestPaidLicenseExpireInfo(key, function(expireAt) {
             if (expireAt && expireAt[0] != '-') {
+                if (isPaidLicenseExpiredAt(expireAt)) {
+                    setPaidLicenseExpiredState(key);
+                    app.update();
+                    msgbox("custom-error", "Error", "付费码已过期");
+                    return;
+                }
                 setPaidLicenseVerifiedState(key, expireAt);
                 app.update();
                 self.timer(1ms, function() {
@@ -860,7 +944,6 @@ class MyIdMenu: Reactor.Component {
                 <Enhancements />
                 {!disable_settings && <li #allow-remote-config-modification><span>{svg_checkmark}</span>{translate('Enable remote configuration modification')}</li>}
                 {!disable_settings && <div .separator />}
-                {!disable_settings && !hide_server_settings && <li #custom-server>{translate('ID/Relay Server')}</li>}
                 {!disable_settings && <li #whitelist title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>}
                 {!disable_settings && !hide_proxy_settings && <li #socks5-server>{translate('Socks5/Http(s) Proxy')}</li>}
                 {!disable_settings && !hide_websocket_settings && <li #allow-websocket><span>{svg_checkmark}</span>{translate('Use WebSocket')}</li>}
