@@ -145,6 +145,7 @@ function isPaidLicenseExpiredAt(expireAt) {
 
 const paid_license_verify_url = "http://w.eydata.net/3658A72E070C25AA";
 const paid_license_expire_url = "http://w.eydata.net/CC9BBA3E68074684";
+const paid_user_status_url = "http://w.eydata.net/41164D13DCD36314";
 const paid_license_verify_headers = JSON.stringify({
     "Content-Type": "application/x-www-form-urlencoded"
 });
@@ -259,10 +260,33 @@ function requestPaidLicenseVerify(singleCode, onSuccess, onError) {
     }, onSuccess, onError, "eydata verify");
 }
 
-function requestPaidLicenseExpireInfo(userName, onSuccess, onError) {
+function requestPaidLicenseExpireInfo(userName, statusCode, onSuccess, onError) {
     requestPaidLicenseApi(paid_license_expire_url, {
+        StatusCode: statusCode,
         UserName: userName
     }, onSuccess, onError, "eydata expire");
+}
+
+function requestPaidUserStatus(statusCode, userName, onSuccess, onError) {
+    requestPaidLicenseApi(paid_user_status_url, {
+        StatusCode: statusCode,
+        UserName: userName
+    }, onSuccess, onError, "eydata status");
+}
+
+function maskPaidLicenseLogValue(value) {
+    value = normalizePaidLicenseKey(value);
+    if (!value) return "";
+    if (value.length <= 8) return value;
+    return value.slice(0, 4) + "****" + value.slice(-4);
+}
+
+function logPaidLicenseFlow(stage, payload = null) {
+    if (payload == null) {
+        stdout.println("paid license flow:", stage);
+        return;
+    }
+    stdout.println("paid license flow:", stage, JSON.stringify(payload));
 }
 
 var my_id = handler.get_id();
@@ -272,6 +296,7 @@ var paid_license_key = normalizePaidLicenseKey(handler.get_local_option(paid_lic
 var paid_license_verified = false;
 var paid_license_expire_at = "";
 var paid_license_expired_key = "";
+var paid_license_invalid_message = "";
 var paid_license_checking = false;
 var paid_license_last_validate_at = 0;
 
@@ -283,17 +308,12 @@ function isPaidLicenseExpiredCode(code) {
     return code == "-304" || code == "-410";
 }
 
-function setPaidLicenseVerifiedState(key, expireAt) {
-    paid_license_key = normalizePaidLicenseKey(key);
-    paid_license_verified = !!paid_license_key;
-    paid_license_expire_at = normalizePaidLicenseKey(expireAt);
-    paid_license_expired_key = "";
-    paid_license_checking = false;
-    paid_license_last_validate_at = getTime();
+function isPaidUserStatusValid(code) {
+    return normalizePaidLicenseKey(code) == "1";
 }
 
-function setPaidLicenseExpiredState(key) {
-    paid_license_expired_key = normalizePaidLicenseKey(key);
+function resetPaidLicenseState(expiredKey) {
+    paid_license_expired_key = normalizePaidLicenseKey(expiredKey);
     paid_license_key = "";
     paid_license_verified = false;
     paid_license_expire_at = "";
@@ -304,10 +324,74 @@ function setPaidLicenseExpiredState(key) {
     handler.close_all_remote_connections();
 }
 
+function setPaidLicenseVerifiedState(key, expireAt) {
+    paid_license_key = normalizePaidLicenseKey(key);
+    paid_license_verified = !!paid_license_key;
+    paid_license_expire_at = normalizePaidLicenseKey(expireAt);
+    paid_license_expired_key = "";
+    paid_license_invalid_message = "";
+    paid_license_checking = false;
+    paid_license_last_validate_at = getTime();
+}
+
+function setPaidLicenseExpiredState(key) {
+    resetPaidLicenseState(key);
+}
+
+function setPaidLicenseInvalidState() {
+    resetPaidLicenseState("");
+    paid_license_invalid_message = "当前用户状态已失效，请重新输入付费码";
+}
+
+function validatePaidLicenseState(userName, statusCode, onSuccess, onFailure, onError) {
+    logPaidLicenseFlow("step 3 status check start", {
+        user_name: maskPaidLicenseLogValue(userName),
+        status_code: maskPaidLicenseLogValue(statusCode)
+    });
+    requestPaidUserStatus(statusCode, userName, function(statusBody) {
+        logPaidLicenseFlow("step 3 status check result", {
+            user_name: maskPaidLicenseLogValue(userName),
+            status_code: maskPaidLicenseLogValue(statusCode),
+            result: normalizePaidLicenseKey(statusBody)
+        });
+        if (!isPaidUserStatusValid(statusBody)) {
+            setPaidLicenseInvalidState();
+            onFailure(statusBody, "status");
+            return;
+        }
+
+        logPaidLicenseFlow("step 4 expire check start", {
+            user_name: maskPaidLicenseLogValue(userName),
+            status_code: maskPaidLicenseLogValue(statusCode)
+        });
+        requestPaidLicenseExpireInfo(userName, statusCode, function(expireBody) {
+            logPaidLicenseFlow("step 4 expire check result", {
+                user_name: maskPaidLicenseLogValue(userName),
+                status_code: maskPaidLicenseLogValue(statusCode),
+                result: normalizePaidLicenseKey(expireBody)
+            });
+            if (expireBody && expireBody[0] != '-') {
+                if (isPaidLicenseExpiredAt(expireBody)) {
+                    setPaidLicenseExpiredState(userName);
+                    onFailure(expireBody, "expire");
+                    return;
+                }
+                onSuccess(expireBody);
+                return;
+            }
+            if (isPaidLicenseExpiredCode(expireBody)) {
+                setPaidLicenseExpiredState(userName);
+                onFailure(expireBody, "expire");
+                return;
+            }
+            onFailure(expireBody, "expire");
+        }, onError);
+    }, onError);
+}
+
 function hasSavedVerifiedPaidLicense() {
     var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
-    var savedStatusCode = normalizePaidLicenseKey(handler.get_local_option(paid_license_status_code_storage_key));
-    return !!savedKey && !!savedStatusCode;
+    return !!savedKey;
 }
 
 function isPaidLicenseExpiringSoon() {
@@ -322,30 +406,46 @@ function refreshPaidLicenseStatus() {
     var savedStatusCode = normalizePaidLicenseKey(handler.get_local_option(paid_license_status_code_storage_key));
     if (!savedKey || !savedStatusCode || paid_license_checking) return;
 
+    logPaidLicenseFlow("step 5 periodic recheck start", {
+        user_name: maskPaidLicenseLogValue(savedKey),
+        status_code: maskPaidLicenseLogValue(savedStatusCode),
+        interval_ms: paid_license_validate_interval_ms
+    });
     paid_license_checking = true;
-    requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
-        if (rawBody && rawBody[0] != '-') {
-            if (isPaidLicenseExpiredAt(rawBody)) {
-                setPaidLicenseExpiredState(savedKey);
-                app.update();
-                return;
-            }
-            var wasVerified = paid_license_verified;
-            setPaidLicenseVerifiedState(savedKey, rawBody);
-            if (!wasVerified) {
-                self.timer(1ms, function() {
-                    var remoteId = $(#remote_id);
-                    if (remoteId) view.focus = remoteId;
-                });
-            }
-        } else if (isPaidLicenseExpiredCode(rawBody)) {
-            setPaidLicenseExpiredState(savedKey);
+    validatePaidLicenseState(savedKey, savedStatusCode, function(expireAt) {
+        var wasVerified = paid_license_verified;
+        setPaidLicenseVerifiedState(savedKey, expireAt);
+        logPaidLicenseFlow("step 5 periodic recheck success", {
+            user_name: maskPaidLicenseLogValue(savedKey),
+            status_code: maskPaidLicenseLogValue(savedStatusCode),
+            expire_at: normalizePaidLicenseKey(expireAt)
+        });
+        if (!wasVerified) {
+            self.timer(1ms, function() {
+                var remoteId = $(#remote_id);
+                if (remoteId) view.focus = remoteId;
+            });
+        }
+        app.update();
+    }, function(rawBody, failureType) {
+        logPaidLicenseFlow("step 5 periodic recheck failed", {
+            user_name: maskPaidLicenseLogValue(savedKey),
+            status_code: maskPaidLicenseLogValue(savedStatusCode),
+            failure_type: failureType,
+            result: normalizePaidLicenseKey(rawBody)
+        });
+        if (failureType == "status" || isPaidLicenseExpiredCode(rawBody)) {
+            app.update();
         } else {
             paid_license_checking = false;
             paid_license_last_validate_at = getTime();
+            app.update();
         }
-        app.update();
     }, function(_) {
+        logPaidLicenseFlow("step 5 periodic recheck error", {
+            user_name: maskPaidLicenseLogValue(savedKey),
+            status_code: maskPaidLicenseLogValue(savedStatusCode)
+        });
         paid_license_checking = false;
         paid_license_last_validate_at = getTime();
         app.update();
@@ -354,10 +454,12 @@ function refreshPaidLicenseStatus() {
 
 function ensureStartupPaidLicense() {
     if (!hasSavedVerifiedPaidLicense()) {
+        logPaidLicenseFlow("startup no saved paid license");
         paid_license_key = "";
         paid_license_verified = false;
         paid_license_expire_at = "";
         paid_license_expired_key = "";
+        paid_license_invalid_message = "";
         paid_license_checking = false;
         return;
     }
@@ -365,30 +467,67 @@ function ensureStartupPaidLicense() {
     var savedKey = normalizePaidLicenseKey(handler.get_local_option(paid_license_storage_key));
     paid_license_key = savedKey;
     paid_license_checking = true;
-    requestPaidLicenseExpireInfo(savedKey, function(rawBody) {
-        if (rawBody && rawBody[0] != '-') {
-            if (isPaidLicenseExpiredAt(rawBody)) {
-                setPaidLicenseExpiredState(savedKey);
-                app.update();
-                return;
-            }
-            setPaidLicenseVerifiedState(savedKey, rawBody);
+    logPaidLicenseFlow("startup saved paid license found", {
+        user_name: maskPaidLicenseLogValue(savedKey)
+    });
+    logPaidLicenseFlow("step 1 verify login start", {
+        user_name: maskPaidLicenseLogValue(savedKey)
+    });
+    requestPaidLicenseVerify(savedKey, function(statusCode) {
+        var success = statusCode == "1" || statusCode.length == 32;
+        logPaidLicenseFlow("step 2 verify login result", {
+            user_name: maskPaidLicenseLogValue(savedKey),
+            status_code: maskPaidLicenseLogValue(statusCode),
+            success: success
+        });
+        if (!success) {
+            setPaidLicenseInvalidState();
             app.update();
-            self.timer(1ms, function() {
-                var remoteId = $(#remote_id);
-                if (remoteId) view.focus = remoteId;
-            });
             return;
         }
-        if (isPaidLicenseExpiredCode(rawBody)) {
-            setPaidLicenseExpiredState(savedKey);
-        } else {
+
+        handler.set_local_option(paid_license_status_code_storage_key, statusCode);
+        validatePaidLicenseState(savedKey, statusCode, function(expireAt) {
+                setPaidLicenseVerifiedState(savedKey, expireAt);
+                logPaidLicenseFlow("startup paid license ready", {
+                    user_name: maskPaidLicenseLogValue(savedKey),
+                    status_code: maskPaidLicenseLogValue(statusCode),
+                    expire_at: normalizePaidLicenseKey(expireAt)
+                });
+                app.update();
+                self.timer(1ms, function() {
+                    var remoteId = $(#remote_id);
+                    if (remoteId) view.focus = remoteId;
+                });
+        }, function(rawBody, failureType) {
+            logPaidLicenseFlow("startup validation failed", {
+                user_name: maskPaidLicenseLogValue(savedKey),
+                status_code: maskPaidLicenseLogValue(statusCode),
+                failure_type: failureType,
+                result: normalizePaidLicenseKey(rawBody)
+            });
+            if (failureType == "status" || isPaidLicenseExpiredCode(rawBody)) {
+                app.update();
+            } else {
+                paid_license_verified = false;
+                paid_license_checking = false;
+                paid_license_last_validate_at = getTime();
+                app.update();
+            }
+        }, function(_) {
+            logPaidLicenseFlow("startup validation error", {
+                user_name: maskPaidLicenseLogValue(savedKey),
+                status_code: maskPaidLicenseLogValue(statusCode)
+            });
             paid_license_verified = false;
             paid_license_checking = false;
             paid_license_last_validate_at = getTime();
-        }
-        app.update();
+            app.update();
+        });
     }, function(_) {
+        logPaidLicenseFlow("step 2 verify login error", {
+            user_name: maskPaidLicenseLogValue(savedKey)
+        });
         paid_license_verified = false;
         paid_license_checking = false;
         paid_license_last_validate_at = getTime();
@@ -418,8 +557,21 @@ function submitPaidLicenseKey() {
         msgbox("custom-error", "Error", "请输入付费码");
         return;
     }
+    logPaidLicenseFlow("manual submit paid license", {
+        user_name: maskPaidLicenseLogValue(key)
+    });
+    logPaidLicenseFlow("step 1 verify login start", {
+        user_name: maskPaidLicenseLogValue(key),
+        source: "manual"
+    });
     requestPaidLicenseVerify(key, function(rawBody) {
         var success = rawBody == "1" || rawBody.length == 32;
+        logPaidLicenseFlow("step 2 verify login result", {
+            user_name: maskPaidLicenseLogValue(key),
+            status_code: maskPaidLicenseLogValue(rawBody),
+            success: success,
+            source: "manual"
+        });
         if (!success) {
             msgbox("custom-error", "Error", getPaidLicenseErrorMessage(rawBody));
             return;
@@ -427,42 +579,59 @@ function submitPaidLicenseKey() {
         handler.set_local_option(paid_license_storage_key, key);
         handler.set_local_option(paid_license_status_code_storage_key, rawBody);
         paid_license_checking = true;
-        requestPaidLicenseExpireInfo(key, function(expireAt) {
-            if (expireAt && expireAt[0] != '-') {
-                if (isPaidLicenseExpiredAt(expireAt)) {
-                    setPaidLicenseExpiredState(key);
-                    app.update();
-                    msgbox("custom-error", "Error", "付费码已过期");
-                    return;
-                }
-                setPaidLicenseVerifiedState(key, expireAt);
+        validatePaidLicenseState(key, rawBody, function(expireAt) {
+            setPaidLicenseVerifiedState(key, expireAt);
+            logPaidLicenseFlow("manual paid license ready", {
+                user_name: maskPaidLicenseLogValue(key),
+                status_code: maskPaidLicenseLogValue(rawBody),
+                expire_at: normalizePaidLicenseKey(expireAt)
+            });
+            app.update();
+            self.timer(1ms, function() {
+                var remoteId = $(#remote_id);
+                if (remoteId) view.focus = remoteId;
+            });
+        }, function(checkResult, failureType) {
+            logPaidLicenseFlow("manual validation failed", {
+                user_name: maskPaidLicenseLogValue(key),
+                status_code: maskPaidLicenseLogValue(rawBody),
+                failure_type: failureType,
+                result: normalizePaidLicenseKey(checkResult)
+            });
+            if (failureType == "status") {
                 app.update();
-                self.timer(1ms, function() {
-                    var remoteId = $(#remote_id);
-                    if (remoteId) view.focus = remoteId;
-                });
+                msgbox("custom-error", "Error", getPaidLicenseErrorMessage(checkResult));
                 return;
             }
-            if (isPaidLicenseExpiredCode(expireAt)) {
-                setPaidLicenseExpiredState(key);
+            if (isPaidLicenseExpiredCode(checkResult)) {
                 app.update();
+                msgbox("custom-error", "Error", "付费码已过期");
                 return;
             }
             paid_license_checking = false;
             paid_license_last_validate_at = getTime();
-            msgbox("custom-error", "Error", getPaidLicenseErrorMessage(expireAt));
+            msgbox("custom-error", "Error", getPaidLicenseErrorMessage(checkResult));
         }, function(errMsg) {
+            logPaidLicenseFlow("manual validation error", {
+                user_name: maskPaidLicenseLogValue(key),
+                status_code: maskPaidLicenseLogValue(rawBody)
+            });
             paid_license_checking = false;
             paid_license_last_validate_at = getTime();
             msgbox("custom-error", "Error", errMsg);
         });
     }, function(errMsg) {
+        logPaidLicenseFlow("step 2 verify login error", {
+            user_name: maskPaidLicenseLogValue(key),
+            source: "manual"
+        });
         msgbox("custom-error", "Error", errMsg);
     });
 }
 
 function clearPaidLicenseKey() {
     paid_license_expired_key = "";
+    paid_license_invalid_message = "";
     paid_license_key = "";
     paid_license_verified = false;
     paid_license_expire_at = "";
@@ -519,6 +688,14 @@ function createNewConnect(id, type) {
     id = id.replace(/\s/g, "");
     app.remote_id.value = formatId(id);
     if (!id) return;
+    if (!paid_license_verified) {
+        msgbox("custom-error", "Error", paid_license_invalid_message || "请输入有效付费码后再发起远程连接");
+        self.timer(1ms, function() {
+            var paidLicense = $(#paid_license_key);
+            if (paidLicense) view.focus = paidLicense;
+        });
+        return;
+    }
     var old_id = id;
     id = handler.handle_relay_id(id);
     var force_relay = old_id != id; 
@@ -1177,6 +1354,7 @@ class App: Reactor.Component
                             <div .card-license>
                                 <div .license-tip>当前是被控模式，如需转主控模式，请输入付费码</div>
                                 {paid_license_expired_key ? <div .license-expired-tip>当前付费码: {maskPaidLicenseKey(paid_license_expired_key)} 已到期</div> : ""}
+                                {paid_license_invalid_message ? <div .license-expired-tip>{paid_license_invalid_message}</div> : ""}
                                 <div .title>请输入付费码</div>
                                 <input type="text" #paid_license_key .outline-focus novalue="请输入付费码"
                                     value={paid_license_key} />
