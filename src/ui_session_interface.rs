@@ -30,6 +30,7 @@ use rdev::{Event, EventType::*, KeyCode};
 use std::ffi::c_void;
 use std::{
     collections::HashMap,
+    io::Write,
     ops::{Deref, DerefMut},
     str::FromStr,
     sync::{
@@ -52,6 +53,69 @@ use crate::keyboard;
 use crate::{client::Data, client::Interface};
 
 const CHANGE_RESOLUTION_VALID_TIMEOUT_SECS: u64 = 15;
+const REMOTE_SESSION_EVENT_LOG_FILE: &str = "remote-session-events.log";
+
+pub(crate) fn log_remote_session_event(
+    peer_id: &str,
+    event: &str,
+    fields: serde_json::Value,
+) {
+    let timestamp = hbb_common::chrono::Local::now();
+    let ts_ms = match u64::try_from(timestamp.timestamp_millis()) {
+        Ok(value) => value,
+        Err(_) => 0,
+    };
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("ts".to_owned(), timestamp.to_rfc3339().into());
+    payload.insert("ts_ms".to_owned(), ts_ms.into());
+    payload.insert("peer_id".to_owned(), peer_id.to_owned().into());
+    payload.insert("event".to_owned(), event.to_owned().into());
+    if let serde_json::Value::Object(map) = fields {
+        payload.extend(map);
+    } else {
+        payload.insert("details".to_owned(), fields);
+    }
+
+    let line = match serde_json::to_string(&payload) {
+        Ok(line) => line,
+        Err(err) => {
+            log::warn!("Failed to serialize remote session event log: {err}");
+            return;
+        }
+    };
+
+    let mut path = Config::log_path();
+    if let Err(err) = std::fs::create_dir_all(&path) {
+        log::warn!(
+            "Failed to create remote session event log directory {}: {err}",
+            path.display()
+        );
+        return;
+    }
+    path.push(REMOTE_SESSION_EVENT_LOG_FILE);
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if let Err(err) = writeln!(file, "{line}") {
+                log::warn!(
+                    "Failed to append remote session event log {}: {err}",
+                    path.display()
+                );
+            }
+        }
+        Err(err) => {
+            log::warn!(
+                "Failed to open remote session event log {}: {err}",
+                path.display()
+            );
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Session<T: InvokeUiSession> {
@@ -93,6 +157,16 @@ enum ConnectionState {
     Connecting,
     Connected,
     Disconnected,
+}
+
+impl ConnectionState {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+        }
+    }
 }
 
 /// ConnectionRoundState is used to control the reconnecting logic.
@@ -1280,6 +1354,7 @@ impl<T: InvokeUiSession> Session<T> {
         // 2. If the connection is established, send `Data::Close`.
         // 3. If the connection is disconnected, do nothing.
         let mut connection_round_state_lock = self.connection_round_state.lock().unwrap();
+        let previous_state = connection_round_state_lock.state.as_str();
         if self.thread.lock().unwrap().is_some() {
             match connection_round_state_lock.state {
                 ConnectionState::Connecting => return,
@@ -1296,8 +1371,25 @@ impl<T: InvokeUiSession> Session<T> {
         if true == force_relay {
             self.lc.write().unwrap().force_relay = true;
         }
-        self.lc.write().unwrap().peer_info = None;
-        self.reconnect_count.fetch_add(1, Ordering::SeqCst);
+        let mut lc = self.lc.write().unwrap();
+        lc.peer_info = None;
+        let peer_id = lc.id.clone();
+        let direct = lc.direct;
+        let force_relay_active = lc.force_relay;
+        drop(lc);
+        let reconnect_count = self.reconnect_count.fetch_add(1, Ordering::SeqCst) + 1;
+        log_remote_session_event(
+            &peer_id,
+            "reconnect_requested",
+            serde_json::json!({
+                "round": round,
+                "previous_state": previous_state,
+                "force_relay_requested": force_relay,
+                "force_relay_active": force_relay_active,
+                "direct": direct,
+                "reconnect_count": reconnect_count,
+            }),
+        );
         let mut lock = self.thread.lock().unwrap();
         // No need to join the previous thread, because it will exit automatically.
         // And the previous thread will not change important states.

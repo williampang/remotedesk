@@ -8,7 +8,7 @@ use crate::{
         QualityStatus, MILLI1, SEC30,
     },
     common::get_default_sound_input,
-    ui_session_interface::{InvokeUiSession, Session},
+    ui_session_interface::{log_remote_session_event, InvokeUiSession, Session},
 };
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::try_empty_clipboard_files, clipboard_file::unix_file_clip};
@@ -183,6 +183,17 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler
                     .set_connection_type(peer.is_secured(), direct, stream_type); // flutter -> connection_ready
                 self.handler.update_direct(Some(direct));
+                log_remote_session_event(
+                    &self.handler.get_id(),
+                    "connected",
+                    serde_json::json!({
+                        "round": round,
+                        "direct": direct,
+                        "secured": peer.is_secured(),
+                        "stream_type": stream_type,
+                        "reconnect_count": self.handler.reconnect_count.load(Ordering::SeqCst),
+                    }),
+                );
                 if conn_type == ConnType::DEFAULT_CONN || conn_type == ConnType::VIEW_CAMERA {
                     self.handler
                         .set_fingerprint(crate::common::pk_to_fingerprint(pk.unwrap_or_default()));
@@ -342,6 +353,17 @@ impl<T: InvokeUiSession> Remote<T> {
             .lock()
             .unwrap()
             .set_disconnected(round);
+        if _set_disconnected_ok {
+            log_remote_session_event(
+                &self.handler.get_id(),
+                "disconnected",
+                serde_json::json!({
+                    "round": round,
+                    "reconnect_count": self.handler.reconnect_count.load(Ordering::SeqCst),
+                    "close_reason_sent": self.sent_close_reason,
+                }),
+            );
+        }
 
         #[cfg(not(target_os = "ios"))]
         if self.handler.is_default() && _set_disconnected_ok {
@@ -525,6 +547,13 @@ impl<T: InvokeUiSession> Remote<T> {
         if self.sent_close_reason {
             return;
         }
+        log_remote_session_event(
+            &self.handler.get_id(),
+            "close_reason_sent",
+            serde_json::json!({
+                "reason": reason,
+            }),
+        );
         let mut misc = Misc::new();
         misc.set_close_reason(reason.to_owned());
         let mut msg = Message::new();

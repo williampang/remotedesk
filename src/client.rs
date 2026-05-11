@@ -34,7 +34,7 @@ use crate::{
     kcp_stream::KcpStream,
     secure_tcp,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
-    ui_session_interface::{InvokeUiSession, Session},
+    ui_session_interface::{log_remote_session_event, InvokeUiSession, Session},
 };
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::check_clipboard_files, clipboard_file::unix_file_clip};
@@ -3654,14 +3654,27 @@ pub trait Interface: Send + Clone + 'static + Sized {
         let title = "Connection Error";
         let text = err.to_string();
         let lc = self.get_lch();
-        let direct = lc.read().unwrap().direct;
-        let received = lc.read().unwrap().received;
+        let lc_guard = lc.read().unwrap();
+        let direct = lc_guard.direct;
+        let received = lc_guard.received;
+        let peer_id = lc_guard.id.clone();
+        drop(lc_guard);
 
         let mut relay_hint = false;
         let mut relay_hint_type = "relay-hint";
         // force relay
         let errno = errno::errno().0;
         log::error!("Connection closed: {err}({errno})");
+        log_remote_session_event(
+            &peer_id,
+            "connection_error",
+            serde_json::json!({
+                "error": err,
+                "errno": errno,
+                "direct": direct,
+                "received": received,
+            }),
+        );
         if direct == Some(true)
             && ((cfg!(windows) && (errno == 10054 || err.contains("10054")))
                 || (!cfg!(windows) && (errno == 104 || err.contains("104")))

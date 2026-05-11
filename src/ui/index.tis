@@ -299,8 +299,9 @@ var paid_license_expired_key = "";
 var paid_license_invalid_message = "";
 var paid_license_checking = false;
 var paid_license_last_validate_at = 0;
+var paid_user_status_failure_count = 0;
 
-const paid_license_validate_interval_ms = 60 * 1000;
+const paid_license_validate_interval_ms = 10 * 60 * 1000;
 const paid_license_expiring_soon_ms = 24 * 60 * 60 * 1000;
 
 function isPaidLicenseExpiredCode(code) {
@@ -317,6 +318,7 @@ function resetPaidLicenseState(expiredKey) {
     paid_license_key = "";
     paid_license_verified = false;
     paid_license_expire_at = "";
+    paid_user_status_failure_count = 0;
     paid_license_checking = false;
     paid_license_last_validate_at = getTime();
     handler.set_local_option(paid_license_storage_key, "");
@@ -330,6 +332,7 @@ function setPaidLicenseVerifiedState(key, expireAt) {
     paid_license_expire_at = normalizePaidLicenseKey(expireAt);
     paid_license_expired_key = "";
     paid_license_invalid_message = "";
+    paid_user_status_failure_count = 0;
     paid_license_checking = false;
     paid_license_last_validate_at = getTime();
 }
@@ -343,7 +346,7 @@ function setPaidLicenseInvalidState() {
     paid_license_invalid_message = "当前用户状态已失效，请重新输入付费码";
 }
 
-function validatePaidLicenseState(userName, statusCode, onSuccess, onFailure, onError) {
+function validatePaidLicenseState(userName, statusCode, onSuccess, onFailure, onError, invalidateStatusImmediately = true) {
     logPaidLicenseFlow("step 3 status check start", {
         user_name: maskPaidLicenseLogValue(userName),
         status_code: maskPaidLicenseLogValue(statusCode)
@@ -355,7 +358,9 @@ function validatePaidLicenseState(userName, statusCode, onSuccess, onFailure, on
             result: normalizePaidLicenseKey(statusBody)
         });
         if (!isPaidUserStatusValid(statusBody)) {
-            setPaidLicenseInvalidState();
+            if (invalidateStatusImmediately) {
+                setPaidLicenseInvalidState();
+            }
             onFailure(statusBody, "status");
             return;
         }
@@ -432,9 +437,19 @@ function refreshPaidLicenseStatus() {
             user_name: maskPaidLicenseLogValue(savedKey),
             status_code: maskPaidLicenseLogValue(savedStatusCode),
             failure_type: failureType,
-            result: normalizePaidLicenseKey(rawBody)
+            result: normalizePaidLicenseKey(rawBody),
+            status_failure_count: failureType == "status" ? paid_user_status_failure_count + 1 : paid_user_status_failure_count
         });
-        if (failureType == "status" || isPaidLicenseExpiredCode(rawBody)) {
+        if (failureType == "status") {
+            paid_user_status_failure_count += 1;
+            if (paid_user_status_failure_count >= 2) {
+                setPaidLicenseInvalidState();
+            } else {
+                paid_license_checking = false;
+                paid_license_last_validate_at = getTime();
+            }
+            app.update();
+        } else if (isPaidLicenseExpiredCode(rawBody)) {
             app.update();
         } else {
             paid_license_checking = false;
@@ -449,7 +464,7 @@ function refreshPaidLicenseStatus() {
         paid_license_checking = false;
         paid_license_last_validate_at = getTime();
         app.update();
-    });
+    }, false);
 }
 
 function ensureStartupPaidLicense() {
@@ -635,6 +650,7 @@ function clearPaidLicenseKey() {
     paid_license_key = "";
     paid_license_verified = false;
     paid_license_expire_at = "";
+    paid_user_status_failure_count = 0;
     paid_license_checking = false;
     handler.set_local_option(paid_license_storage_key, "");
     handler.set_local_option(paid_license_status_code_storage_key, "");
