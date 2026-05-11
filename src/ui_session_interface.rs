@@ -1371,9 +1371,9 @@ impl<T: InvokeUiSession> Session<T> {
         if true == force_relay {
             self.lc.write().unwrap().force_relay = true;
         }
+        let peer_id = self.get_id();
         let mut lc = self.lc.write().unwrap();
         lc.peer_info = None;
-        let peer_id = lc.id.clone();
         let direct = lc.direct;
         let force_relay_active = lc.force_relay;
         drop(lc);
