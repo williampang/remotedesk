@@ -78,6 +78,7 @@ pub struct Remote<T: InvokeUiSession> {
     chroma: Arc<RwLock<Option<Chroma>>>,
     last_record_state: bool,
     sent_close_reason: bool,
+    last_message_debug: Option<MessageDebugInfo>,
 }
 
 #[derive(Default)]
@@ -87,6 +88,13 @@ struct ParsedPeerInfo {
     idd_impl: String,
     support_view_camera: bool,
     support_terminal: bool,
+}
+
+struct MessageDebugInfo {
+    kind: String,
+    len: usize,
+    preview_hex: String,
+    received_at_ms: i64,
 }
 
 impl ParsedPeerInfo {
@@ -127,7 +135,27 @@ impl<T: InvokeUiSession> Remote<T> {
             chroma: Default::default(),
             last_record_state: false,
             sent_close_reason: false,
+            last_message_debug: None,
         }
+    }
+
+    fn format_bytes_preview(data: &[u8], max_len: usize) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        for byte in data.iter().take(max_len) {
+            let _ = write!(&mut out, "{byte:02x}");
+        }
+        out
+    }
+
+    fn remember_last_message(&mut self, kind: String, data: &[u8]) {
+        self.last_message_debug = Some(MessageDebugInfo {
+            kind,
+            len: data.len(),
+            preview_hex: Self::format_bytes_preview(data, 32),
+            received_at_ms: get_time(),
+        });
     }
 
     pub async fn io_loop(&mut self, key: &str, token: &str, round: u32) {
@@ -237,6 +265,23 @@ impl<T: InvokeUiSession> Remote<T> {
                             if let Some(res) = res {
                                 match res {
                                     Err(err) => {
+                                        log_remote_session_event(
+                                            &self.handler.get_id(),
+                                            "stream_recv_error_debug",
+                                            serde_json::json!({
+                                                "round": round,
+                                                "direct": direct,
+                                                "secured": peer.is_secured(),
+                                                "stream_type": stream_type,
+                                                "error": err.to_string(),
+                                                "last_message": self.last_message_debug.as_ref().map(|info| serde_json::json!({
+                                                    "kind": info.kind,
+                                                    "len": info.len,
+                                                    "preview_hex": info.preview_hex,
+                                                    "received_at_ms": info.received_at_ms,
+                                                })),
+                                            }),
+                                        );
                                         self.handler.on_establish_connection_error(err.to_string());
                                         break;
                                     }
@@ -1313,6 +1358,17 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+            let msg_kind = if let Some(union) = msg_in.union.as_ref() {
+                let debug = format!("{union:?}");
+                debug
+                    .split('(')
+                    .next()
+                    .unwrap_or(debug.as_str())
+                    .to_owned()
+            } else {
+                "Empty".to_owned()
+            };
+            self.remember_last_message(msg_kind, data);
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
@@ -2096,6 +2152,21 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 _ => {}
             }
+        } else {
+            log_remote_session_event(
+                &self.handler.get_id(),
+                "message_parse_error_debug",
+                serde_json::json!({
+                    "len": data.len(),
+                    "preview_hex": Self::format_bytes_preview(data, 64),
+                    "last_message": self.last_message_debug.as_ref().map(|info| serde_json::json!({
+                        "kind": info.kind,
+                        "len": info.len,
+                        "preview_hex": info.preview_hex,
+                        "received_at_ms": info.received_at_ms,
+                    })),
+                }),
+            );
         }
         true
     }
